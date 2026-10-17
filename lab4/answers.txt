@@ -1,0 +1,55 @@
+Name: Richard Pham
+Date: October 12, 2026
+Title: Lab4 – Answers and Observations
+
+Step 1
+------
+How many threads are created?
+- The main thread creates NTHREADS = 10 worker threads (plus main itself).
+
+What values of i are passed?
+- Each thread is given &i, a pointer to the same stack variable in main.
+- The value printed is whatever i holds when that thread runs go(), not a
+  private snapshot of the iteration that created the thread.
+
+How could multiple threads print the same value of i?
+- Race on shared memory: main keeps changing i in the create loop (and again
+  in the join loop) while worker threads concurrently dereference &i.
+- Scheduling is nondeterministic, so several threads may read i after main has
+  already advanced (or after the create loop finishes, when i == 10), producing
+  duplicate or out-of-range iteration numbers.
+
+Observations:
+- Running ./step1 multiple times often shows repeated or unexpected iteration
+  values; sometimes runs look “lucky” and print distinct values — that does not
+  mean the program is correct.
+
+Step 2
+------
+Fix:
+- Pass a unique index by value: pthread_create(..., (void *)(size_t)i) and cast
+  back inside go(). Each thread then has its own copy of the iteration number.
+- Alternative: allocate a separate int (or use an array of ints) for each thread
+  so each gets a distinct address that is not overwritten.
+
+Observations:
+- ./step2 consistently prints iterations 0 through 9 exactly once each.
+
+Step 3
+------
+- Creates N threads; thread i computes the full ith row of C.
+- Usage: ./step3 N M L
+- Demo with small sizes (e.g. 3 2 3) so printed matrices are easy to check.
+- For larger N/M/L, parallelism is clearer but output is verbose.
+
+Step 4
+------
+- Creates N*L threads; each computes one C[i][j].
+- Usage: ./step4 N M L
+- Same demo sizes as Step 3; results should match Step 3 for the same A/B
+  (here A/B are freshly randomized each run).
+
+Compile
+-------
+make
+# or: gcc -o step1 step1.c -pthread  (same for step2–step4)
