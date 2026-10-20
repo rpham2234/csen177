@@ -1,0 +1,117 @@
+Name: Richard Pham
+Date: October 20, 2026
+Title: Lab5 – Answers and Observations
+
+Compile
+-------
+make
+# or:
+# gcc -Wall -pthread -o threadSync threadSync.c
+# gcc -Wall -pthread -o step2 step2.c
+# gcc -Wall -pthread -o step3 step3.c
+# gcc -Wall -pthread -o step4 step4.c
+
+Step 1
+------
+Program: threadSync.c
+What happens:
+- main creates NTHREADS = 10 threads and waits for all of them with pthread_join.
+- A named semaphore "mutex" is created with initial value 1, so it behaves as a
+  binary semaphore.
+- Each thread prints "attempting" before sem_wait. That print is outside the
+  critical section, so those lines can show up close together and in an order
+  chosen by the scheduler.
+- sem_wait is the entry section. The first thread decrements the semaphore from
+  1 to 0 and enters. Every other thread blocks in sem_wait until sem_post.
+- Inside the critical section the thread sleeps for 1 second, then prints
+  "running in its Critical Section". Only one of those lines appears at a time,
+  about one second apart.
+- sem_post is the exit section. It increments the semaphore and wakes one waiter.
+- sem_unlink removes the named semaphore. The SIGINT handler does the same so a
+  Ctrl-C does not leave the name behind in the system.
+
+How this differs from Lab 4:
+- Lab 4 threads did not depend on each other. They ran their work at the same
+  time, and Step 1 of Lab 4 raced on one shared loop index, so printed values
+  could repeat or fall outside 0..9.
+- Here the semaphore is shared state that the threads must pass through. The
+  critical section (sleep + the second printf) is mutually exclusive. The
+  "attempting" order and the critical-section order still change from run to
+  run, but two threads never overlap inside the critical section.
+
+Sample (order changes every run; critical-section lines are one per second):
+Thread 1 is now attempting ....
+Thread 3 is now attempting ....
+...
+Thread 1 is running in its Critical Section........
+Thread 3 is running in its Critical Section........
+
+Step 2
+------
+Program: step2.c (threadSync.c rewritten with a mutex lock)
+- pthread_mutex_init replaces sem_open. The lock starts unlocked.
+- pthread_mutex_lock is the entry section; pthread_mutex_unlock is the exit
+  section. pthread_mutex_destroy runs after every thread has joined.
+- A mutex is binary: one thread holds it, or nobody does. The Step 1 semaphore
+  was used the same way because its initial value was 1. A semaphore can also
+  count above 1; a mutex cannot.
+- Observable behavior matches Step 1. "attempting" lines are unordered.
+  Critical-section lines are serialized, about one second apart, and their
+  order is not required to match the "attempting" order, because the print
+  happens before the lock is acquired.
+
+Step 3
+------
+Program: step3.c
+Bounded buffer of 5 slots, 12 items, one producer thread and one consumer thread.
+
+Shared data, matching the lab pseudocode:
+- empty starts at 5 (free slots)
+- full starts at 0 (occupied slots)
+- mutex starts at 1 (mutual exclusion on the buffer)
+- in is the next index the producer writes; out is the next index the consumer reads
+
+Producer:
+- builds the next item outside the critical section
+- sem_wait(empty), then sem_wait(mutex)
+- writes buffer[in], then advances in with wraparound
+- sem_post(mutex), then sem_post(full)
+
+Consumer:
+- sem_wait(full), then sem_wait(mutex)
+- reads buffer[out], clears that slot, advances out
+- sem_post(mutex), then sem_post(empty)
+- uses the item outside the critical section
+
+Waiting on empty/full before mutex avoids deadlock. If a thread took the mutex
+first and then waited for a slot, it would hold the lock while the other thread
+needed that lock to free a slot.
+
+The consumer sleeps longer than the producer, so the buffer fills. Count of
+occupied slots never exceeds 5. Items leave in the same order they enter
+(1, then 2, ... then 12). in and out wrap from 4 back to 0. When the buffer
+hits 5 items, the next line is a consume; the producer is blocked in sem_wait
+on empty until the consumer posts empty.
+
+Step 4
+------
+Program: step4.c
+Same buffer, same item count, same in/out indexes. Coordination uses a mutex
+plus two condition variables instead of counting semaphores.
+
+- empty: a thread waits here while count == BUFFER_SIZE (no free slot).
+  The consumer signals empty after it removes an item.
+- full: a thread waits here while count == 0 (nothing to take).
+  The producer signals full after it inserts an item.
+- count is the number of items in the buffer and is only read or written
+  while the mutex is held.
+
+pthread_cond_wait atomically unlocks the mutex and sleeps, so the other thread
+can enter. On wakeup it locks the mutex again. The while loops (not a single
+if) recheck count after every wakeup, which covers a spurious wakeup.
+
+This removes busy waiting. A thread that finds the buffer full or empty does
+not spin on the lock; it sleeps on the condition variable until it is signaled.
+
+Output matches Step 3: items 1..12 in order, count stays in 0..5, and a full
+buffer (count == 5) is followed by a consume before the next produce.
